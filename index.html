@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>究极绿宝石 V5 资源地图</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;font:14px/1.5 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#14171c;color:#e6e8eb}
+#app{display:flex;height:100%}
+#side{width:360px;min-width:300px;overflow-y:auto;background:#1b1f26;border-right:1px solid #2c323c;padding:12px}
+#mapwrap{flex:1;position:relative;min-width:0}
+#map{position:absolute;inset:0;background:#0d0f12}
+.leaflet-image-layer{image-rendering:pixelated;image-rendering:crisp-edges}
+h1{font-size:16px;margin:0 0 8px}
+h2{font-size:13px;margin:14px 0 6px;color:#9aa4b2;font-weight:600}
+input[type=search]{width:100%;padding:8px 10px;border-radius:6px;border:1px solid #39414d;background:#11141a;color:#e6e8eb;font-size:14px}
+button,.btn{cursor:pointer;border:1px solid #39414d;background:#262c36;color:#e6e8eb;border-radius:5px;padding:2px 8px;font-size:12px}
+button:hover{background:#323a47}
+a.lk{color:#6cb6ff;cursor:pointer;text-decoration:none}
+a.lk:hover{text-decoration:underline}
+details{margin:2px 0}
+summary{cursor:pointer}
+.small{font-size:12px;color:#9aa4b2}
+#filters label{display:inline-flex;align-items:center;gap:4px;margin:2px 10px 2px 0;cursor:pointer;font-size:13px}
+.dot{display:inline-block;width:12px;height:12px;border-radius:3px;border:2px solid;vertical-align:middle}
+#results details{background:#222831;border-radius:5px;padding:4px 8px;margin:4px 0}
+#results .ent{padding:1px 0 1px 8px;font-size:13px}
+#maplist{font-size:13px}
+#maplist .it{display:block;padding:1px 4px;color:#cfd5de;cursor:pointer;border-radius:3px}
+#maplist .it:hover{background:#2a303a}
+#maplist .it.cur{background:#2d4a6b}
+table.w{border-collapse:collapse;width:100%;font-size:13px;margin:2px 0 6px}
+table.w td{padding:1px 4px;border-bottom:1px solid #2a303a}
+table.w td:last-child{text-align:right;color:#9aa4b2}
+.mk{display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;border:2px solid;font-size:11px;font-weight:700;color:#000;box-shadow:0 0 3px #000}
+.mk.small{width:10px;height:10px;border-radius:50%;border-width:1px;font-size:0}
+.leaflet-popup-content{max-height:260px;overflow-y:auto;font-size:13px;line-height:1.5;margin:10px 12px}
+.leaflet-popup-content .pl{margin:2px 0}
+.leaflet-popup-content b{color:#222}
+#coord{position:absolute;left:10px;bottom:10px;z-index:1000;background:rgba(20,23,28,.88);padding:4px 10px;border-radius:5px;font-size:13px;pointer-events:none}
+#help{font-size:12px;color:#9aa4b2;background:#222831;border-radius:5px;padding:6px 8px;margin:8px 0}
+@media (max-width:760px){#app{flex-direction:column}#side{width:100%;height:42%;border-right:0;border-bottom:1px solid #2c323c}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h1>究极绿宝石 V5 资源地图</h1>
+    <input id="q" type="search" placeholder="搜索 精灵 / 道具 / 地名,例如:皮卡丘、大师球、橙华市" autocomplete="off">
+    <div id="results"></div>
+    <h2>显示的标记</h2>
+    <div id="filters"></div>
+    <div style="margin-top:4px"><button onclick="setAll(true)">全选</button> <button onclick="setAll(false)">全不选</button></div>
+    <div id="help">坐标 (x,y) = 地图内格子坐标,以地图左上角为 (0,0),x 向右、y 向下。鼠标移到地图上,左下角会显示当前格子坐标。</div>
+    <h2>当前地图</h2>
+    <div id="info"></div>
+    <h2>全部地图</h2>
+    <div id="maplist"></div>
+  </div>
+  <div id="mapwrap"><div id="map"></div><div id="coord">—</div></div>
+</div>
+<script src="lib/leaflet.js"></script>
+<script src="data.js"></script>
+<script>
+(function(){
+var CATS={
+  shop:['商店','#ffd700','店'],gift:['赠送精灵','#ff50c8','赠'],static:['定点遭遇','#ff5a5a','战'],
+  item:['道具','#4aa8ff','物'],hidden:['隐藏道具','#19e3e3','隐'],trainer:['训练家','#ff9a1f','训'],
+  sign:['告示/互动','#e8e8e8','示'],npc:['其他NPC','#8a8a8a','人'],low:['低可信条目','#aaaaaa','?'],warp:['传送门','#b84dff','门']
+};
+var ON={shop:1,gift:1,static:1,item:1,hidden:1,warp:1,trainer:0,sign:0,npc:0,low:0};
+var TYPES=['城镇','城市','道路','洞穴/地下','水下','海上道路','室内','秘密基地','无','未知','?'];
+var esc=function(s){return String(s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})};
+var cur=null,curH=0,curW=0,imgLayer=null,mk=[],hl=null;
+var map=L.map('map',{crs:L.CRS.Simple,minZoom:-3,maxZoom:4,zoomSnap:0.25,zoomDelta:0.5,attributionControl:false});
+var ll=function(x,y){return [curH-(y*16+8),x*16+8]};
+
+/* ---------- filters ---------- */
+var fh='';
+Object.keys(CATS).forEach(function(c){
+  fh+='<label><input type="checkbox" data-c="'+c+'"'+(ON[c]?' checked':'')+'><span class="dot" style="border-color:'+CATS[c][1]+';background:'+CATS[c][1]+'55"></span>'+CATS[c][0]+'</label>';
+});
+document.getElementById('filters').innerHTML=fh;
+document.getElementById('filters').addEventListener('change',function(e){
+  var c=e.target.getAttribute('data-c'); if(!c) return; ON[c]=e.target.checked?1:0; applyFilter();
+});
+window.setAll=function(v){
+  Object.keys(CATS).forEach(function(c){ON[c]=v?1:0});
+  document.querySelectorAll('#filters input').forEach(function(i){i.checked=!!v});
+  applyFilter();
+};
+function applyFilter(){
+  mk.forEach(function(o){
+    var vis=o.cats.some(function(c){return ON[c]});
+    var has=map.hasLayer(o.m);
+    if(vis&&!has) o.m.addTo(map); else if(!vis&&has) map.removeLayer(o.m);
+  });
+}
+
+/* ---------- map display ---------- */
+function icon(prim){
+  var c=CATS[prim]||CATS.npc, small=(prim==='npc'||prim==='low'||prim==='sign');
+  return L.divIcon({className:'',html:'<div class="mk'+(small?' small':'')+'" style="background:'+c[1]+';border-color:#000a">'+c[2]+'</div>',
+    iconSize:small?[10,10]:[20,20],iconAnchor:small?[5,5]:[10,10],popupAnchor:[0,-10]});
+}
+function nameOf(k){var m=MAPS[k];return m?(m.a+' ('+k+')'):k}
+window.go=function(k,x,y){
+  if(!MAPS[k]) return;
+  if(k!==cur) show(k);
+  if(x!=null&&y!=null&&x!=='null'){
+    x=+x;y=+y;
+    map.setView(ll(x,y),Math.max(map.getZoom(),1),{animate:false});
+    if(hl) map.removeLayer(hl);
+    hl=L.circleMarker(ll(x,y),{radius:18,color:'#fff',weight:3,fillOpacity:0,interactive:false}).addTo(map);
+    setTimeout(function(){if(hl){map.removeLayer(hl);hl=null}},4000);
+    history.replaceState(null,'','#'+k+'@'+x+','+y);
+  } else history.replaceState(null,'','#'+k);
+};
+function show(k){
+  var m=MAPS[k]; cur=k; curW=m.w*16; curH=m.h*16;
+  if(imgLayer) map.removeLayer(imgLayer);
+  mk.forEach(function(o){map.removeLayer(o.m)}); mk=[];
+  if(hl){map.removeLayer(hl);hl=null}
+  var b=[[0,0],[curH,curW]];
+  imgLayer=L.imageOverlay('maps/'+k.replace('.','_')+'.png',b,{interactive:false}).addTo(map);
+  map.setMaxBounds([[-curH*0.5,-curW*0.5],[curH*1.5,curW*1.5]]);
+  map.invalidateSize();
+  map.fitBounds(b,{animate:false,padding:[8,8],maxZoom:2});
+  m.m.forEach(function(r){
+    var x=r[0],y=r[1],prim=r[2],cats=r[3],lines=r[4];
+    var html='<b>'+esc(cats.map(function(c){return CATS[c][0]}).join(' / '))+'</b> <span class="small">('+x+','+y+')</span>'+
+      lines.map(function(l){return '<div class="pl">'+esc(l)+'</div>'}).join('');
+    var mm=L.marker(ll(x,y),{icon:icon(prim)}).bindPopup(html,{maxWidth:360});
+    mk.push({m:mm,cats:cats});
+  });
+  m.wp.forEach(function(w){
+    var x=w[0],y=w[1],dk=w[2],dx=w[3],dy=w[4];
+    var html='<b>传送门</b> <span class="small">('+x+','+y+')</span><div class="pl">→ '+esc(nameOf(dk))+(dx!=null?' 的 ('+dx+','+dy+')':'')+
+      '</div><div class="pl"><button onclick="go(\''+dk+'\','+dx+','+dy+')">前往</button></div>';
+    var mm=L.marker(ll(x,y),{icon:icon('warp')}).bindPopup(html);
+    mk.push({m:mm,cats:['warp'],});
+  });
+  applyFilter();
+  renderInfo(k);
+  document.querySelectorAll('#maplist .it').forEach(function(a){a.classList.toggle('cur',a.getAttribute('data-k')===k)});
+  document.title=m.a+' ('+k+') — 究极绿宝石 V5 资源地图';
+}
+function renderInfo(k){
+  var m=MAPS[k],h='<div><b>'+esc(m.a)+'</b> <span class="small">'+k+' · '+esc(m.t)+' · '+m.w+'×'+m.h+' 格</span></div>';
+  if(m.ni) h+='<div class="small">⚠ 这张地图的图块数据异常,无法渲染,仅显示灰底。</div>';
+  if(m.e) h+='<div class="small">室内入口:'+esc(m.e)+'</div>';
+  if(m.cn&&m.cn.length){
+    h+='<div style="margin-top:4px" class="small">相邻:'+m.cn.map(function(c){return esc(c[0])+'侧 <a class="lk" onclick="go(\''+c[2]+'\')">'+esc(nameOf(c[2]))+'</a>'}).join('、')+'</div>';
+  }
+  if(m.ml&&m.ml.length){
+    h+='<details><summary>进入/触发时发生的事件 ('+m.ml.length+')</summary>'+m.ml.map(function(l){return '<div class="small">'+esc(l)+'</div>'}).join('')+'</details>';
+  }
+  if(m.wild&&m.wild.length){
+    h+='<h2>野生精灵</h2>';
+    m.wild.forEach(function(w){
+      h+='<div><b>'+esc(w[0])+'</b> <span class="small">遭遇率 '+w[1]+'</span></div><table class="w">'+
+        w[2].map(function(s){return '<tr><td><a class="lk" onclick="doSearch(\''+esc(s[1])+'\')">'+esc(s[1])+'</a></td><td>Lv'+(s[2]===s[3]?s[2]:s[2]+'-'+s[3])+'</td><td>'+s[4]+'%</td></tr>'}).join('')+'</table>';
+    });
+  }
+  document.getElementById('info').innerHTML=h;
+}
+
+/* ---------- coordinate readout ---------- */
+map.on('mousemove',function(e){
+  var x=Math.floor(e.latlng.lng/16),y=Math.floor((curH-e.latlng.lat)/16),el=document.getElementById('coord');
+  if(cur&&x>=0&&y>=0&&x<MAPS[cur].w&&y<MAPS[cur].h) el.textContent=nameOf(cur)+' · 格子坐标 ('+x+','+y+')';
+  else el.textContent=cur?nameOf(cur):'—';
+});
+
+/* ---------- map list ---------- */
+(function(){
+  var by={};
+  Object.keys(MAPS).forEach(function(k){var t=MAPS[k].t;(by[t]=by[t]||[]).push(k)});
+  var h='';
+  TYPES.forEach(function(t){
+    var ks=by[t]; if(!ks) return;
+    ks.sort(function(a,b){var A=a.split('.'),B=b.split('.');return (A[0]-B[0])||(A[1]-B[1])});
+    h+='<details data-t="1"><summary>'+esc(t)+' <span class="small">'+ks.length+'</span></summary>'+
+      ks.map(function(k){return '<a class="it" data-k="'+k+'" data-s="'+esc(MAPS[k].a+' '+k)+'" onclick="go(\''+k+'\')">'+esc(MAPS[k].a)+' <span class="small">'+k+'</span></a>'}).join('')+'</details>';
+  });
+  document.getElementById('maplist').innerHTML=h;
+})();
+
+/* ---------- search ---------- */
+var KIND={wild:'野生',gift:'赠送',static:'定点遭遇',shop:'商店',item:'道具点',hidden:'隐藏道具'};
+function entList(arr){
+  var by={};
+  arr.forEach(function(e){(by[e[1]]=by[e[1]]||[]).push(e)});
+  return Object.keys(KIND).filter(function(k){return by[k]}).map(function(k){
+    return '<div class="small" style="margin-top:3px">'+KIND[k]+' ('+by[k].length+')</div>'+by[k].map(function(e){
+      var mm=/\((\d+),(\d+)\)/.exec(e[2]);
+      var arg=mm?(',' +mm[1]+','+mm[2]):'';
+      return '<div class="ent"><a class="lk" onclick="go(\''+e[0]+'\''+arg+')">'+esc(nameOf(e[0]))+'</a> <span class="small">'+esc(e[2])+'</span></div>';
+    }).join('');
+  }).join('');
+}
+window.doSearch=function(t){var q=document.getElementById('q');q.value=t;search(t)};
+function search(t){
+  t=t.trim().toLowerCase();
+  var R=document.getElementById('results');
+  document.querySelectorAll('#maplist .it').forEach(function(a){
+    a.style.display=(!t||a.getAttribute('data-s').toLowerCase().indexOf(t)>=0)?'':'none';
+  });
+  document.querySelectorAll('#maplist details').forEach(function(d){d.open=!!t});
+  if(!t){R.innerHTML='';return}
+  var h='',n=0,LIM=60;
+  var hit=[];
+  SPN.forEach(function(nm,i){if(i>0&&nm&&nm.toLowerCase().indexOf(t)>=0&&SPI[i]) hit.push(i)});
+  if(hit.length) h+='<h2>精灵 ('+hit.length+')</h2>';
+  hit.slice(0,LIM).forEach(function(i){
+    h+='<details'+(hit.length<=3?' open':'')+'><summary>'+esc(SPN[i])+' <span class="small">#'+i+' · '+SPI[i].length+' 处</span></summary>'+entList(SPI[i])+'</details>';
+  });
+  if(hit.length>LIM) h+='<div class="small">还有 '+(hit.length-LIM)+' 个精灵,请输入更完整的名字。</div>';
+  var ih=[];
+  ITN.forEach(function(nm,i){if(i>0&&nm&&nm.toLowerCase().indexOf(t)>=0&&ITI[i]) ih.push(i)});
+  if(ih.length) h+='<h2>道具 ('+ih.length+')</h2>';
+  ih.slice(0,LIM).forEach(function(i){
+    h+='<details'+(ih.length<=3?' open':'')+'><summary>'+esc(ITN[i])+' <span class="small">#'+i+' · '+ITI[i].length+' 处</span></summary>'+entList(ITI[i])+'</details>';
+  });
+  if(ih.length>LIM) h+='<div class="small">还有 '+(ih.length-LIM)+' 个道具,请输入更完整的名字。</div>';
+  if(!h) h='<div class="small" style="margin:6px 0">没有匹配的精灵或道具(下方地图列表已按地名过滤)。</div>';
+  R.innerHTML=h;
+}
+var qt=null;
+document.getElementById('q').addEventListener('input',function(e){
+  var v=e.target.value; clearTimeout(qt); qt=setTimeout(function(){search(v)},150);
+});
+
+/* ---------- start ---------- */
+var hh=(location.hash||'').replace('#',''),mt=/^(\d+\.\d+)(?:@(\d+),(\d+))?$/.exec(hh);
+if(mt&&MAPS[mt[1]]) go(mt[1],mt[2],mt[3]); else go('0.0');
+window.addEventListener('hashchange',function(){
+  var m2=/^(\d+\.\d+)(?:@(\d+),(\d+))?$/.exec((location.hash||'').replace('#',''));
+  if(m2&&MAPS[m2[1]]&&(m2[1]!==cur)) go(m2[1],m2[2],m2[3]);
+});
+})();
+</script>
+</body>
+</html>
